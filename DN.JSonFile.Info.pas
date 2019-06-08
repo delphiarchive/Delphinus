@@ -36,11 +36,19 @@ type
     FCompilerMin: TCompilerVersion;
     FCompilerMax: TCompilerVersion;
     FName: string;
-    FLicenseFile: string;
-    FLicenseType: string;
+
+    FLicenses: TArray<TDNLicense>;
+
     FPlatforms: TDNCompilerPlatforms;
     FDependencies: TList<TInfoDependency>;
+    FRepositoryType: string;
+    FRepository: string;
+    FRepositoryUser: string;
+    FRepositoryRedirectIssues: Boolean;
+    FReportUrl: string;
   protected
+    procedure ReadLicenses(const ARoot: TJSONObject);
+    procedure WriteLicenses(const ARoot: TJSONObject);
     procedure Load(const ARoot: TJSONObject); override;
     procedure Save(const ARoot: TJSONObject); override;
     procedure LoadPlatforms(const APlatforms: string);
@@ -51,18 +59,22 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    property Picture: string read FPicture;
+    property Picture: string read FPicture write FPicture;
     property ID: TGUID read FID write FID;
     property Name: string read FName write FName;
-    property LicenseType: string read FLicenseType write FLicenseType;
-    property LicenseFile: string read FLicenseFile write FLicenseFile;
-    property FirstVersion: string read FFirstVersion;
-    property PackageCompilerMin: TCompilerVersion read FPackageCompilerMin;
-    property PackageCompilerMax: TCompilerVersion read FPackageCompilerMax;
-    property CompilerMin: TCompilerVersion read FCompilerMin;
-    property CompilerMax: TCompilerVersion read FCompilerMax;
-    property Platforms: TDNCompilerPlatforms read FPlatforms;
+    property Licenses: TArray<TDNLicense> read FLicenses;
+    property FirstVersion: string read FFirstVersion write FFirstVersion;
+    property PackageCompilerMin: TCompilerVersion read FPackageCompilerMin write FPackageCompilerMin;
+    property PackageCompilerMax: TCompilerVersion read FPackageCompilerMax write FPackageCompilerMax;
+    property CompilerMin: TCompilerVersion read FCompilerMin write FCompilerMin;
+    property CompilerMax: TCompilerVersion read FCompilerMax write FCompilerMax;
+    property Platforms: TDNCompilerPlatforms read FPlatforms write FPlatforms;
     property Dependencies: TList<TInfoDependency> read FDependencies;
+    property RepositoryType: string read FRepositoryType write FRepositoryType;
+    property RepositoryUser: string read FRepositoryUser write FRepositoryUser;
+    property Repository: string read FRepository write FRepository;
+    property RepositoryRedirectIssues: Boolean read FRepositoryRedirectIssues write FRepositoryRedirectIssues;
+    property ReportUrl: string read FReportUrl write FReportUrl;
   end;
 
 implementation
@@ -104,13 +116,14 @@ end;
 procedure TInfoFile.Load(const ARoot: TJSONObject);
 var
   LDependencies: TJSONArray;
+  LRepository: TJSONObject;
+  LValue: TJSONValue;
 begin
   inherited;
   FPicture := ReadString(ARoot, 'picture');
   FID := ReadID(ARoot);
   FName := ReadString(ARoot, 'name');
-  FLicenseType := ReadString(ARoot, 'license_type');
-  FLicenseFile := ReadString(ARoot, 'license_file');
+  ReadLicenses(ARoot);
   FFirstVersion := ReadString(ARoot, 'first_version');
   FCompilerMin := ReadFloat(ARoot, 'compiler_min');
   FCompilerMax := ReadFloat(ARoot, 'compiler_max');
@@ -119,6 +132,21 @@ begin
   LoadPlatforms(ReadString(ARoot, 'platforms'));
   if ARoot.TryGetValue<TJSONArray>('dependencies', LDependencies) then
     LoadDependencies(LDependencies);
+
+  if ARoot.TryGetValue<TJSONObject>('repository', LRepository) then
+  begin
+    if LRepository.TryGetValue<TJSONValue>('type', LValue) then
+      FRepositoryType := LValue.Value;
+    if LRepository.TryGetValue<TJSONValue>('user', LValue) then
+      FRepositoryUser := LValue.Value;
+    if LRepository.TryGetValue<TJSONValue>('name', LValue) then
+      FRepository := LValue.Value;
+    FRepositoryRedirectIssues := True;
+    if LRepository.TryGetValue<TJSONValue>('redirect_issues', LValue) then
+      FRepositoryRedirectIssues := not (LValue is TJSONFalse);
+  end;
+
+  FReportUrl := ReadString(ARoot, 'report_url');
 end;
 
 procedure TInfoFile.LoadDependencies(const ADependencies: TJSONArray);
@@ -172,24 +200,69 @@ begin
   end;
 end;
 
+procedure TInfoFile.ReadLicenses(const ARoot: TJSONObject);
+var
+  LValue: TJSONValue;
+  LArray: TJSONArray;
+  LLicense: TDNLicense;
+  LObject: TJSONObject;
+  i: Integer;
+begin
+  if ReadArray(ARoot, 'licenses', LArray) then
+  begin
+    SetLength(FLicenses, LArray.Count);
+    for i := 0 to Pred(LArray.Count) do
+    begin
+      LValue := LArray.Items[i];
+      if LValue is TJSONObject then
+      begin
+        LObject := TJSONObject(LValue);
+        LLicense.LicenseType := ReadString(LObject, 'type');
+        LLicense.LicenseFile := ReadString(LObject, 'file');
+        FLicenses[i] := LLicense;
+      end;
+    end;
+  end
+  else
+  begin
+    LLicense.LicenseType := ReadString(ARoot, 'license_type');
+    LLicense.LicenseFile := ReadString(ARoot, 'license_file');
+    if (LLicense.LicenseType <> '') or (LLicense.LicenseFile <> '') then
+    begin
+      SetLength(FLicenses, 1);
+      FLicenses[0] := LLicense;
+    end;
+  end;
+
+end;
+
 procedure TInfoFile.Save(const ARoot: TJSONObject);
 var
   LDependencies: TJSONArray;
+  LRepository: TJSONObject;
 begin
   inherited;
   WritePath(ARoot, 'picture', FPicture);
   WriteString(ARoot, 'id', FID.ToString);
   WriteString(ARoot, 'name', FName);
-  WriteString(ARoot, 'license_type', FLicenseType);
-  WritePath(ARoot, 'license_file', FLicenseFile);
+  WriteLicenses(ARoot);
   WriteString(ARoot, 'first_version', FFirstVersion);
   WriteFloat(ARoot, 'package_compiler_max', FPackageCompilerMax);
   WriteFloat(ARoot, 'package_compiler_min', FPackageCompilerMin);
   WriteFloat(ARoot, 'compiler_min', FCompilerMin);
   WriteFloat(ARoot, 'compiler_max', FCompilerMax);
   WriteString(ARoot, 'platforms', GetPlatformString());
+  WriteString(ARoot, 'report_url', FReportUrl);
   LDependencies := WriteArray(ARoot, 'dependencies');
   SaveDependencies(LDependencies);
+  if FRepositoryType <> '' then
+  begin
+    LRepository := WriteObject(ARoot, 'repository');
+    WriteString(LRepository, 'type', FRepositoryType);
+    WriteString(LRepository, 'user', FRepositoryUser);
+    WriteString(LRepository, 'name', FRepository);
+    WriteBoolean(LRepository, 'redirect_issues', FRepositoryRedirectIssues);
+  end;
 end;
 
 procedure TInfoFile.SaveDependencies(const ADependencies: TJSONArray);
@@ -202,6 +275,21 @@ begin
     LObject := WriteArrayObject(ADependencies);
     WriteString(LObject, 'id', LDependency.ID.ToString);
     WriteString(LObject, 'version_min', LDependency.Version.ToString);
+  end;
+end;
+
+procedure TInfoFile.WriteLicenses(const ARoot: TJSONObject);
+var
+  LLicenses: TJSONArray;
+  LObject: TJSONObject;
+  LLicense: TDNLicense;
+begin
+  LLicenses := WriteArray(ARoot, 'licenses');
+  for LLicense in FLicenses do
+  begin
+    LObject := WriteArrayObject(LLicenses);
+    WriteString(LObject, 'type', LLicense.LicenseType);
+    WriteString(LObject, 'file', LLicense.LicenseFile);
   end;
 end;
 
